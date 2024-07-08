@@ -2,4 +2,13 @@ Paper link:
 
 https://arxiv.org/pdf/1505.04597
 
-- [ ] TODO: Implement training script for the model
+Notes:
+
+Implementation doesn't fully follow the paper due to the paper's age. For example original implementation didn't use paddings and used tiling of the image. From my experiments, padding=1 in convolutions worked much better
+than trying to mirror dataset images at the borders. Overall architecture principle is unchanged.
+
+Instructions:
+
+1. Run `python unet/dummy_images.py`
+2. Run `python unet/train.py`
+3. Take a look at one of the segmented image(saved as `segmented_image.jpg`)

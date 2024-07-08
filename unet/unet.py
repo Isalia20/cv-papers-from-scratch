@@ -7,9 +7,9 @@ from torchvision.transforms.functional import center_crop
 class DownsampleBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3)
-        self.conv2 = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=3)
-        self.pooling_layer = nn.MaxPool2d(kernel_size=2)
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, padding=1)
+        self.pooling_layer = nn.MaxPool2d(kernel_size=2, stride=2)
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.bn2 = nn.BatchNorm2d(out_channels)
     
@@ -24,8 +24,8 @@ class DownsampleBlock(nn.Module):
 class BottleNeckBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3)
-        self.conv2 = nn.Conv2d(in_channels=out_channels, out_channels=out_channels // 2, kernel_size=3)
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=out_channels, out_channels=out_channels // 2, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.bn2 = nn.BatchNorm2d(out_channels // 2)
     
@@ -44,14 +44,14 @@ class UpsampleBlock(nn.Module):
                                            kernel_size=2, 
                                            stride=2)
         # in_channels is multiplied by 2 due to concatenation before convolution
-        self.conv1 = nn.Conv2d(in_channels=in_channels * 2, out_channels=in_channels, kernel_size=3)
-        self.conv2 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels // 2, kernel_size=3)
+        self.conv1 = nn.Conv2d(in_channels=in_channels * 2, out_channels=in_channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels // 2, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(in_channels)
         self.bn2 = nn.BatchNorm2d(in_channels // 2)
 
     def forward(self, x, x_last):
         x = self.up_conv(x) # [1, 512, 56, 56] for example
-        x_last = center_crop(x_last, x.shape[-2:]) # Center crop the input from last layer
+        x_last = center_crop(x_last, x.shape[-2:]) # Center crop the input from last layer before concatenation
         x = torch.cat([x_last, x], dim=1) # concatenate on channel dimension
         x = nn.functional.relu(self.bn1(self.conv1(x)), inplace=False)
         x = nn.functional.relu(self.bn2(self.conv2(x)), inplace=False)
@@ -65,8 +65,8 @@ class LastUpsampleBlock(nn.Module):
                                           out_channels=in_channels,
                                           kernel_size=2,
                                           stride=2)
-        self.conv1 = nn.Conv2d(in_channels=in_channels * 2, out_channels=in_channels, kernel_size=3)
-        self.conv2 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=3)
+        self.conv1 = nn.Conv2d(in_channels=in_channels * 2, out_channels=in_channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(in_channels)
         self.bn2 = nn.BatchNorm2d(in_channels)
     
