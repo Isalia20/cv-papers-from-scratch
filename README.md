@@ -1,6 +1,6 @@
 # Computer vision papers from scratch
 
-Repository for implementing computer vision papers from scratch.
+Repository for implementing computer vision papers from scratch. Each model is self contained(no imports from other models) and are easy to read/understand.
 
 ## Papers implemented:
 
@@ -9,5 +9,6 @@ Repository for implementing computer vision papers from scratch.
 
 ## Papers to be implemented:
 
-- [ ] [U-Net Transformer: Self and Cross Attention for Medical Image Segmentation](https://arxiv.org/pdf/2103.06104)
+- [ ] [GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoint](https://arxiv.org/pdf/2305.13245)
+
 - [ ] and many others
