@@ -9,6 +9,8 @@ Repository for implementing computer vision papers from scratch. Each model is s
 
 ## Papers to be implemented:
 
-- [ ] [GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoint](https://arxiv.org/pdf/2305.13245)
-
+- [ ] [End-to-End Object Detection with Transformers](https://arxiv.org/pdf/2005.12872)
+- [ ] [DINO: Emerging Properties in Self-Supervised Vision Transformers](https://arxiv.org/pdf/2104.14294)
+- [ ] [DINOv2: Learning Robust Visual Features without Supervision](https://arxiv.org/pdf/2304.07193)
+- [ ] [Convnext - A ConvNet for the 2020s](https://arxiv.org/pdf/2201.03545)
 - [ ] and many others
