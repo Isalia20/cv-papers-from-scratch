@@ -6,6 +6,7 @@ Repository for implementing computer vision papers from scratch. Each model is s
 
 - [x] [Vision transformer needs register](https://arxiv.org/pdf/2309.16588)
 - [x] [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/pdf/1505.04597)
+- [x] [Resnet: Deep Residual Learning for Image Recognition](https://arxiv.org/pdf/1512.03385)
 
 ## Papers to be implemented:
 
@@ -13,4 +14,5 @@ Repository for implementing computer vision papers from scratch. Each model is s
 - [ ] [DINO: Emerging Properties in Self-Supervised Vision Transformers](https://arxiv.org/pdf/2104.14294)
 - [ ] [DINOv2: Learning Robust Visual Features without Supervision](https://arxiv.org/pdf/2304.07193)
 - [ ] [Convnext - A ConvNet for the 2020s](https://arxiv.org/pdf/2201.03545)
+- [ ] [Swin Transformer: Hierarchical Vision Transformer using Shifted Windows](https://arxiv.org/pdf/2103.14030)
 - [ ] and many others
