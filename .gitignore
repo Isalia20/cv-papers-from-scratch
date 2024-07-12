@@ -2,3 +2,4 @@ test_images/
 train_images/
 train_masks/
 test_masks/
+data/
