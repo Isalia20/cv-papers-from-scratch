@@ -64,7 +64,7 @@ class ResnetLayer(nn.Module):
         return x
 
 class Resnet50(nn.Module):
-    def __init__(self, in_channels, out_channels: List[int], out_features: int):
+    def __init__(self, in_channels, out_channels: List[int]):
         super().__init__()
         # Initial 7x7 convolution
         self.conv = nn.Conv2d(in_channels=in_channels, out_channels=out_channels[0], kernel_size=7, stride=2, padding=3, bias=False)
@@ -225,7 +225,7 @@ class DETR(nn.Module):
         self.emb_dim = emb_dim
         self.expansion = 4
         self.backbone_out_channels = [64, 128, 256, 512]
-        self.backbone = Resnet50(in_channels=3, out_channels=self.backbone_out_channels, out_features=10)
+        self.backbone = Resnet50(in_channels=3, out_channels=self.backbone_out_channels)
         # Convolution for making the output of backbone correspond to emb_dim channels
         self.emb_dim_conv = nn.Conv2d(in_channels=self.backbone_out_channels[-1] * self.expansion, out_channels=emb_dim, kernel_size=1)
         self.pos_emb = nn.Parameter(torch.rand((1, backbone_feature_map_size * backbone_feature_map_size, emb_dim)))
