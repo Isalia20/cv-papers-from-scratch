@@ -257,10 +257,11 @@ class DETR(nn.Module):
 
 
 def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     x = torch.rand((1, 3, 224, 224))
     model = DETR(emb_dim=256, backbone_feature_map_size=x.shape[-1] // 32, num_encoder_blocks=6, num_decoder_blocks=6, num_classes=80)
-    x = x.to("mps")
-    model.to("mps")
+    x = x.to(device)
+    model.to(device)
     out = model(x)
     print(out[0].shape)
     print(out[1].shape)
