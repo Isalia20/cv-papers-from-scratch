@@ -7,7 +7,7 @@ Repository for implementing computer vision papers from scratch. Each model is s
 - [x] [Vision transformer needs register](https://arxiv.org/pdf/2309.16588)
 - [x] [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/pdf/1505.04597)
 - [x] [Resnet: Deep Residual Learning for Image Recognition](https://arxiv.org/pdf/1512.03385)
-- [x] [End-to-End Object Detection with Transformers](https://arxiv.org/pdf/2005.12872)
+- [x] [DETR: End-to-End Object Detection with Transformers](https://arxiv.org/pdf/2005.12872)
 
 ## Papers to be implemented:
 
