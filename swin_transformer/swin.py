@@ -14,17 +14,36 @@ class WindowedAttention(nn.Module):
     """
     Regular windowed attention
     """
-    def __init__(self, emb_dim, num_attn_heads = 8, feature_map_size: int = 56):
+    def __init__(self, emb_dim, num_attn_heads = 8, feature_map_size: int = 56, window_size: int = 7):
         super().__init__()
         self.num_attn_heads = num_attn_heads
         self.emb_dim = emb_dim
         self.emb_dim_per_head = emb_dim // num_attn_heads
-        self.num_windows = 4
+        self.window_size = window_size
         self.q_proj = nn.Linear(in_features=emb_dim, out_features=emb_dim)
         self.k_proj = nn.Linear(in_features=emb_dim, out_features=emb_dim)
         self.v_proj = nn.Linear(in_features=emb_dim, out_features=emb_dim)
         self.feature_map_size = feature_map_size
+        self.initialize_relative_pos_emb_table(window_size, num_attn_heads)
     
+    
+    def initialize_relative_pos_emb_table(self, window_size, num_heads):
+        # Relative position bias table (Eqn. 4)
+        self.relative_position_bias_table = nn.Parameter(torch.zeros((window_size * 2 - 1) * (window_size * 2 - 1), num_heads))
+        coords_h = torch.arange(window_size)
+        coords_w = torch.arange(window_size)
+        mesh = torch.stack(torch.meshgrid(coords_h, coords_w, indexing="ij"))
+        mesh = mesh.flatten(1)
+        # Calculate distance from each coordinate to all other coordinates, tensor of shape: 2, 49, 49 (for window_size=7)
+        relative_coords = mesh[:, :, None] - mesh[:, None, :]
+        relative_coords = relative_coords.permute(1, 2, 0)
+        relative_coords += torch.abs(relative_coords.min())
+        # Scale x coordinate as in to avoid (1, 2) coordinate and (2, 1) coordinate colliding
+        relative_coords[:, :, 0] = relative_coords[:, :, 0] * (2 * window_size - 1)
+        relative_position_index = relative_coords.sum(-1)
+        self.register_buffer("relative_position_index", relative_position_index)
+        
+
     def split_num_heads(self, x):
         # Splits windowed tensor into multiple heads
         # B, num_windows, window_size, window_size, emb_dim -> B, num_windows, num_attn_heads, window_size * window_size, emb_dim_per_head 
@@ -38,12 +57,17 @@ class WindowedAttention(nn.Module):
         q = self.q_proj(windows)
         k = self.k_proj(windows)
         v = self.v_proj(windows)
-        
+
         q = self.split_num_heads(q)
         k = self.split_num_heads(k)
         v = self.split_num_heads(v)
-        # # Step 2: Attention score and final scores
-        attention_scores = torch.softmax((q @ k.transpose(-1, -2)) / math.sqrt(self.emb_dim_per_head), dim=-1)
+        # # Step 2: Attention score and final scores(with relative positional bias added Eqn. 4)
+        relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+            self.window_size ** 2, self.window_size ** 2, -1)
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
+        attention_scores = (q @ k.transpose(-1, -2)) / math.sqrt(self.emb_dim_per_head)
+        attention_scores = attention_scores + relative_position_bias.unsqueeze(0)
+        attention_scores = torch.softmax(attention_scores, dim=-1)
         scores = attention_scores @ v
         return scores.reshape(B, L, emb_dim)
     
@@ -105,24 +129,20 @@ class SwinBlock(nn.Module):
     """
     def __init__(self, emb_dim, feature_map_size):
         super().__init__()
-        self.block_1_norm_pre_attn = nn.LayerNorm(emb_dim)
-        self.block_1_norm_pre_mlp = nn.LayerNorm(emb_dim)
-        self.block_2_norm_pre_attn = nn.LayerNorm(emb_dim)
-        self.block_2_norm_pre_mlp = nn.LayerNorm(emb_dim)
+        self.norm_pre_attn = nn.LayerNorm(emb_dim)
+        self.norm_pre_mlp = nn.LayerNorm(emb_dim)
         self.window_attention = WindowedAttention(emb_dim, num_attn_heads=8, feature_map_size=feature_map_size)
-        # self.shifted_window_attention = SwinAttention(emb_dim, num_attn_heads=8)
-        self.block_1_mlp = MLPLayer(emb_dim=emb_dim, intermediate_size=emb_dim * 2)
+        self.mlp = MLPLayer(emb_dim=emb_dim, intermediate_size=emb_dim * 2)
     
     def forward(self, x):
-        # Block 1
-        h = self.block_1_norm_pre_attn(x)
+        h = self.norm_pre_attn(x)
         h = self.window_attention(x)
         # Residual
         h += x
         # # Norm before mlp
-        h_mlp = self.block_1_norm_pre_mlp(h)
+        h_mlp = self.norm_pre_mlp(h)
         # # MLP
-        h_mlp = self.block_1_mlp(h)
+        h_mlp = self.mlp(h)
         h_mlp += h
         return h
 
@@ -148,6 +168,15 @@ class SwinTransformer(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.head = nn.Linear(self.emb_dim * 8, num_classes)
     
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+    
     def stage_forward(self, x, block_module_list, patch_merging_module, emb_dim):
         x = x.reshape(x.shape[0], int(math.sqrt(x.shape[1])), int(math.sqrt((x.shape[1]))), emb_dim)
         x = patch_merging_module(x).transpose(1, -1) # B, H, W, emb_dim -> B, emb_dim, H, W
@@ -164,7 +193,6 @@ class SwinTransformer(nn.Module):
     
     def forward(self, x):
         #TODO fix this organization wtf is this
-        
         # Instead of having patch partitioner first and then linear layer, they are done
         # with one conv, since combining them is just one linear function
         x = self.patch_partitioner(x)
