@@ -168,15 +168,6 @@ class SwinTransformer(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.head = nn.Linear(self.emb_dim * 8, num_classes)
     
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-    
     def stage_forward(self, x, block_module_list, patch_merging_module, emb_dim):
         x = x.reshape(x.shape[0], int(math.sqrt(x.shape[1])), int(math.sqrt((x.shape[1]))), emb_dim)
         x = patch_merging_module(x).transpose(1, -1) # B, H, W, emb_dim -> B, emb_dim, H, W
