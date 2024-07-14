@@ -183,15 +183,6 @@ class SwinTransformer(nn.Module):
         x = x.reshape(x.shape[0], self.emb_dim * 8, side_length, side_length)
         return x
     
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-    
     def forward(self, x):
         #TODO fix this organization wtf is this
         # Instead of having patch partitioner first and then linear layer, they are done
