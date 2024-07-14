@@ -24,12 +24,11 @@ class WindowedAttention(nn.Module):
         self.k_proj = nn.Linear(in_features=emb_dim, out_features=emb_dim)
         self.v_proj = nn.Linear(in_features=emb_dim, out_features=emb_dim)
         self.feature_map_size = feature_map_size
-        self.initialize_relative_pos_emb_table(window_size, num_attn_heads)
-    
-    
-    def initialize_relative_pos_emb_table(self, window_size, num_heads):
         # Relative position bias table (Eqn. 4)
-        self.relative_position_bias_table = nn.Parameter(torch.zeros((window_size * 2 - 1) * (window_size * 2 - 1), num_heads))
+        self.relative_position_bias_table = nn.Parameter(torch.zeros((window_size * 2 - 1) * (window_size * 2 - 1), num_attn_heads))
+        self.initialize_relative_pos_index(window_size)
+    
+    def initialize_relative_pos_index(self, window_size):
         coords_h = torch.arange(window_size)
         coords_w = torch.arange(window_size)
         mesh = torch.stack(torch.meshgrid(coords_h, coords_w, indexing="ij"))
@@ -76,11 +75,11 @@ class MLPLayer(nn.Module):
     def __init__(self, emb_dim, intermediate_size):
         super().__init__()
         self.dense = nn.Linear(emb_dim, intermediate_size)
-        self.silu = nn.SiLU(inplace=True)
+        self.gelu = nn.GELU()
         self.output_proj = nn.Linear(intermediate_size, emb_dim)
     
     def forward(self, hidden_states):
-        hidden_states = self.silu(self.dense(hidden_states))
+        hidden_states = self.gelu(self.dense(hidden_states))
         # Scale it back to original embedding size
         hidden_states = self.output_proj(hidden_states)
         return hidden_states
@@ -90,7 +89,8 @@ class PatchMerging(nn.Module):
     def __init__(self, emb_dim):
         super().__init__()
         self.reduction = nn.Linear(in_features=emb_dim * 4, out_features=emb_dim * 2)
-    
+        self.norm = nn.LayerNorm(emb_dim * 4)
+
     def forward(self, x):
         # x is shape of [B, H, W, emb_dim]
         # The first patch merging layer concatenates the features of each group of 2 × 2 neighboring patches, 
@@ -119,6 +119,7 @@ class PatchMerging(nn.Module):
         x2 = x[:, 0::2, 1::2, :]
         x3 = x[:, 1::2, 1::2, :]
         x = torch.cat([x0, x1, x2, x3], dim=-1) # Shape of [B, emb_dim * 4, H // 2, W // 2], spatial dimensions get downsampled
+        x = self.norm(x)
         x = self.reduction(x)
         return x
 
@@ -181,6 +182,15 @@ class SwinTransformer(nn.Module):
         side_length = int(math.sqrt(total_elements // (x.shape[0] * self.emb_dim * 8)))
         x = x.reshape(x.shape[0], self.emb_dim * 8, side_length, side_length)
         return x
+    
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
     
     def forward(self, x):
         #TODO fix this organization wtf is this
