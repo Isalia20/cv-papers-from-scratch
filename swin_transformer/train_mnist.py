@@ -4,7 +4,6 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from swin_transformer import SwinTransformer
-from torch.nn import init
 
 
 def train(model, train_loader, optimizer, criterion, device, epochs=1):
@@ -50,8 +49,7 @@ def test(model, test_loader, criterion, device):
 
 
 def main():
-    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    device = "mps"
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
     transform = transforms.Compose([
         transforms.Resize((224, 224)),

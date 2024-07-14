@@ -2,6 +2,8 @@ import torch
 from torch import nn
 import math
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 def window_partition(x, window_size):
     B, emb_dim, H, W = x.shape
     # B, emb_dim, H, W -> B, num_windows, window_size, window_size, emb_dim
@@ -9,13 +11,21 @@ def window_partition(x, window_size):
     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, -1, window_size, window_size, emb_dim)
     return windows
 
+def window_unpartition(x, emb_dim, feature_map_size):
+    """
+    Reverse the window partition, includes reversing the multi head split as well
+    """
+    # X of shape [B, num_windows, num_attn_heads, feature_map_size * feature_map_size, emb_dim_per_head] -> [B, emb_dim, feature_map_size, feature_map_size]
+    return x.reshape(x.shape[0], emb_dim, feature_map_size, feature_map_size)
 
-class WindowedAttention(nn.Module):
+
+class SwinAttention(nn.Module):
     """
-    Regular windowed attention
+    Swin Attention
     """
-    def __init__(self, emb_dim, num_attn_heads = 8, feature_map_size: int = 56, window_size: int = 7):
+    def __init__(self, emb_dim, num_attn_heads = 8, feature_map_size: int = 56, window_size: int = 7, shift_windows: bool = True): #TODO make this true
         super().__init__()
+        self.shift_windows = shift_windows
         self.num_attn_heads = num_attn_heads
         self.emb_dim = emb_dim
         self.emb_dim_per_head = emb_dim // num_attn_heads
@@ -27,6 +37,34 @@ class WindowedAttention(nn.Module):
         # Relative position bias table (Eqn. 4)
         self.relative_position_bias_table = nn.Parameter(torch.zeros((window_size * 2 - 1) * (window_size * 2 - 1), num_attn_heads))
         self.initialize_relative_pos_index(window_size)
+        
+        self.shift_size = self.window_size // 2
+        self.shifted_window_mask = torch.zeros((1)).to(DEVICE)
+        if self.shift_windows:
+            self.shifted_window_mask = self.get_sw_attn_mask().to(DEVICE)
+        self.shifted_window_mask.requires_grad_(False)
+    
+    def get_sw_attn_mask(self):
+        # Attention mask if we have shifted windows
+        H, W = self.feature_map_size, self.feature_map_size
+        img_mask = torch.zeros((1, 1, H, W))
+        h_slices = (slice(0, -self.window_size),
+                    slice(-self.window_size, -self.shift_size),
+                    slice(-self.shift_size, None))
+        w_slices = (slice(0, -self.window_size),
+                    slice(-self.window_size, -self.shift_size),
+                    slice(-self.shift_size, None))
+        cnt = 0
+        for h in h_slices:
+            for w in w_slices:
+                img_mask[:, :, h, w] = cnt
+                cnt += 1
+
+        mask_windows = window_partition(img_mask, self.window_size)  # num_windows, window_size, window_size, 1
+        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
+        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        return attn_mask.unsqueeze(0).unsqueeze(2)
     
     def initialize_relative_pos_index(self, window_size):
         coords_h = torch.arange(window_size)
@@ -40,7 +78,8 @@ class WindowedAttention(nn.Module):
         # Scale x coordinate as in to avoid (1, 2) coordinate and (2, 1) coordinate colliding
         relative_coords[:, :, 0] = relative_coords[:, :, 0] * (2 * window_size - 1)
         relative_position_index = relative_coords.sum(-1)
-        self.register_buffer("relative_position_index", relative_position_index)
+        self.relative_position_index = relative_position_index
+        self.relative_position_index.requires_grad_(False)
         
 
     def split_num_heads(self, x):
@@ -52,6 +91,8 @@ class WindowedAttention(nn.Module):
     def forward(self, x):
         B, L, emb_dim = x.shape
         x = x.reshape(B, emb_dim, self.feature_map_size, self.feature_map_size)
+        if self.shift_windows:
+            x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(-2, -1))
         windows = window_partition(x, window_size=7)
         q = self.q_proj(windows)
         k = self.k_proj(windows)
@@ -66,9 +107,15 @@ class WindowedAttention(nn.Module):
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
         attention_scores = (q @ k.transpose(-1, -2)) / math.sqrt(self.emb_dim_per_head)
         attention_scores = attention_scores + relative_position_bias.unsqueeze(0)
+        attention_scores += self.shifted_window_mask
         attention_scores = torch.softmax(attention_scores, dim=-1)
         scores = attention_scores @ v
-        return scores.reshape(B, L, emb_dim)
+        # Unshift the feature map if shifted
+        if self.shift_windows:
+            scores = window_unpartition(scores, self.emb_dim, self.feature_map_size)
+            scores = torch.roll(scores, shifts=(self.shift_size, self.shift_size), dims=(-2, -1))
+        scores = scores.reshape(B, L, emb_dim)
+        return scores
     
 
 class MLPLayer(nn.Module):
@@ -128,16 +175,16 @@ class SwinBlock(nn.Module):
     Class for Swinblock which in reality is 2 blocks in one. See Fig.3(b) in paper
     to get a good understanding of why this is implemented it this way
     """
-    def __init__(self, emb_dim, feature_map_size):
+    def __init__(self, emb_dim, feature_map_size, shift_windows):
         super().__init__()
         self.norm_pre_attn = nn.LayerNorm(emb_dim)
         self.norm_pre_mlp = nn.LayerNorm(emb_dim)
-        self.window_attention = WindowedAttention(emb_dim, num_attn_heads=8, feature_map_size=feature_map_size)
+        self.swin_attention = SwinAttention(emb_dim, num_attn_heads=8, feature_map_size=feature_map_size, shift_windows=shift_windows)
         self.mlp = MLPLayer(emb_dim=emb_dim, intermediate_size=emb_dim * 2)
     
     def forward(self, x):
         h = self.norm_pre_attn(x)
-        h = self.window_attention(x)
+        h = self.swin_attention(x)
         # Residual
         h += x
         # # Norm before mlp
@@ -154,15 +201,15 @@ class SwinTransformer(nn.Module):
         self.emb_dim = embed_dim
         self.patch_partitioner = nn.Conv2d(in_channels=in_channels, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size)
         # Stage 1
-        self.stage_1_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim, feature_map_size=56) for _ in range(stage_1_depth)])
+        self.stage_1_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim, feature_map_size=56, shift_windows=bool(i % 2)) for i in range(stage_1_depth)])
         # Stage 2
-        self.stage_2_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim * 2, feature_map_size=28) for _ in range(stage_2_depth)])
+        self.stage_2_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim * 2, feature_map_size=28, shift_windows=bool(i % 2)) for i in range(stage_2_depth)])
         self.stage_2_patch_merging = PatchMerging(emb_dim=embed_dim)
         # Stage 3
-        self.stage_3_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim * 4, feature_map_size=14) for _ in range(stage_3_depth)])
+        self.stage_3_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim * 4, feature_map_size=14, shift_windows=bool(i % 2)) for i in range(stage_3_depth)])
         self.stage_3_patch_merging = PatchMerging(emb_dim=embed_dim * 2)
         # Stage 4
-        self.stage_4_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim * 8, feature_map_size=7) for _ in range(stage_4_depth)])
+        self.stage_4_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim * 8, feature_map_size=7, shift_windows=bool(i % 2)) for i in range(stage_4_depth)])
         self.stage_4_patch_merging = PatchMerging(emb_dim=embed_dim * 4)
         # Output layers
         self.norm = nn.LayerNorm(embed_dim * 8)
