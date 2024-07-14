@@ -63,7 +63,7 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-    model = SwinTransformer(in_channels=1, patch_size=4, embed_dim=96, stage_1_depth=2, stage_2_depth=2, stage_3_depth=6, stage_4_depth=2, num_classes=10)
+    model = SwinTransformer(in_channels=1, patch_size=4, embed_dim=96, num_classes=10)
     model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=0.0001)

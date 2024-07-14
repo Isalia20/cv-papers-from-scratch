@@ -23,7 +23,7 @@ class SwinAttention(nn.Module):
     """
     Swin Attention
     """
-    def __init__(self, emb_dim, num_attn_heads = 8, feature_map_size: int = 56, window_size: int = 7, shift_windows: bool = True): #TODO make this true
+    def __init__(self, emb_dim: int, num_attn_heads: int, feature_map_size: int, window_size: int, shift_windows: bool):
         super().__init__()
         self.shift_windows = shift_windows
         self.num_attn_heads = num_attn_heads
@@ -135,6 +135,7 @@ class MLPLayer(nn.Module):
 class PatchMerging(nn.Module):
     def __init__(self, emb_dim):
         super().__init__()
+        self.emb_dim = emb_dim
         self.reduction = nn.Linear(in_features=emb_dim * 4, out_features=emb_dim * 2)
         self.norm = nn.LayerNorm(emb_dim * 4)
 
@@ -168,7 +169,7 @@ class PatchMerging(nn.Module):
         x = torch.cat([x0, x1, x2, x3], dim=-1) # Shape of [B, emb_dim * 4, H // 2, W // 2], spatial dimensions get downsampled
         x = self.norm(x)
         x = self.reduction(x)
-        return x
+        return x.transpose(1, -1) # B, H, W, emb_dim -> B, emb_dim, H, W
 
 class SwinBlock(nn.Module):
     """
@@ -179,7 +180,7 @@ class SwinBlock(nn.Module):
         super().__init__()
         self.norm_pre_attn = nn.LayerNorm(emb_dim)
         self.norm_pre_mlp = nn.LayerNorm(emb_dim)
-        self.swin_attention = SwinAttention(emb_dim, num_attn_heads=8, feature_map_size=feature_map_size, shift_windows=shift_windows)
+        self.swin_attention = SwinAttention(emb_dim, num_attn_heads=8, window_size=7, feature_map_size=feature_map_size, shift_windows=shift_windows)
         self.mlp = MLPLayer(emb_dim=emb_dim, intermediate_size=emb_dim * 2)
     
     def forward(self, x):
@@ -195,66 +196,71 @@ class SwinBlock(nn.Module):
         return h
 
 
-class SwinTransformer(nn.Module):
-    def __init__(self, in_channels, patch_size, embed_dim, stage_1_depth: int, stage_2_depth: int, stage_3_depth: int, stage_4_depth: int, num_classes):
+class SwinStage(nn.Module):
+    def __init__(self, emb_dim, feature_map_size, num_blocks, is_stage_1: bool):
         super().__init__()
-        self.emb_dim = embed_dim
-        self.patch_partitioner = nn.Conv2d(in_channels=in_channels, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size)
-        # Stage 1
-        self.stage_1_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim, feature_map_size=56, shift_windows=bool(i % 2)) for i in range(stage_1_depth)])
-        # Stage 2
-        self.stage_2_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim * 2, feature_map_size=28, shift_windows=bool(i % 2)) for i in range(stage_2_depth)])
-        self.stage_2_patch_merging = PatchMerging(emb_dim=embed_dim)
-        # Stage 3
-        self.stage_3_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim * 4, feature_map_size=14, shift_windows=bool(i % 2)) for i in range(stage_3_depth)])
-        self.stage_3_patch_merging = PatchMerging(emb_dim=embed_dim * 2)
-        # Stage 4
-        self.stage_4_blocks = nn.ModuleList([SwinBlock(emb_dim=embed_dim * 8, feature_map_size=7, shift_windows=bool(i % 2)) for i in range(stage_4_depth)])
-        self.stage_4_patch_merging = PatchMerging(emb_dim=embed_dim * 4)
-        # Output layers
-        self.norm = nn.LayerNorm(embed_dim * 8)
+        self.patch_merging = PatchMerging(emb_dim // 2)
+        self.blocks = nn.ModuleList([SwinBlock(emb_dim, feature_map_size, shift_windows=(bool(i % 2))) for i in range(num_blocks)])
+        self.is_stage_1 = is_stage_1
+    
+    def forward(self, x):
+        if not self.is_stage_1:
+            x = x.reshape(x.shape[0], int(math.sqrt(x.shape[1])), int(math.sqrt((x.shape[1]))), -1)
+            x = self.patch_merging(x)
+            x = x.flatten(2).transpose(-1, -2)
+        for block in self.blocks:
+            x = block(x)
+        return x
+
+
+class OutputLayer(nn.Module):
+    def __init__(self, emb_dim, num_classes, feature_map_size):
+        super().__init__()
+        self.emb_dim = emb_dim
+        self.num_classes = num_classes
+        self.feature_map_size = feature_map_size
+        self.norm = nn.LayerNorm(emb_dim * 8)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.head = nn.Linear(self.emb_dim * 8, num_classes)
     
-    def stage_forward(self, x, block_module_list, patch_merging_module, emb_dim):
-        x = x.reshape(x.shape[0], int(math.sqrt(x.shape[1])), int(math.sqrt((x.shape[1]))), emb_dim)
-        x = patch_merging_module(x).transpose(1, -1) # B, H, W, emb_dim -> B, emb_dim, H, W
-        x = x.flatten(2).transpose(-1, -2)
-        for block in block_module_list:
-            x = block(x)
+    def forward(self, x):
+        x = x.reshape(x.shape[0], self.emb_dim * 8, self.feature_map_size, self.feature_map_size)
+        x = self.avgpool(x).squeeze(-1).squeeze(-1)
+        x = self.head(x)
         return x
-    
-    def output_layer(self, x):
-        total_elements = x.shape[0] * x.shape[1] * x.shape[2]
-        side_length = int(math.sqrt(total_elements // (x.shape[0] * self.emb_dim * 8)))
-        x = x.reshape(x.shape[0], self.emb_dim * 8, side_length, side_length)
-        return x
+
+class SwinTransformer(nn.Module):
+    def __init__(self, in_channels, patch_size, embed_dim, num_classes):
+        super().__init__()
+        self.emb_dim = embed_dim
+        self.patch_partitioner = nn.Conv2d(in_channels=in_channels, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.stage_1 = SwinStage(embed_dim, feature_map_size=56, num_blocks=2, is_stage_1=True)
+        self.stage_2 = SwinStage(embed_dim * 2, feature_map_size=28, num_blocks=2, is_stage_1=False)
+        self.stage_3 = SwinStage(embed_dim * 4, feature_map_size=14, num_blocks=6, is_stage_1=False)
+        self.stage_4 = SwinStage(embed_dim * 8, feature_map_size=7, num_blocks=2, is_stage_1=False)
+        # Output layers
+        self.out_layer = OutputLayer(embed_dim, num_classes=num_classes, feature_map_size=7)
     
     def forward(self, x):
-        #TODO fix this organization wtf is this
         # Instead of having patch partitioner first and then linear layer, they are done
         # with one conv, since combining them is just one linear function
         x = self.patch_partitioner(x)
         x = x.flatten(2).transpose(-1, -2)
-        # Stage 1 swin block
-        for block in self.stage_1_blocks:
-            x = block(x)
-        # Stage 2
-        x = self.stage_forward(x, self.stage_2_blocks, self.stage_2_patch_merging, emb_dim=self.emb_dim)
-        # Stage 3
-        x = self.stage_forward(x, self.stage_3_blocks, self.stage_3_patch_merging, emb_dim=self.emb_dim * 2)
-        # Stage 4
-        x = self.stage_forward(x, self.stage_4_blocks, self.stage_4_patch_merging, emb_dim=self.emb_dim * 4)
-        # Output layers TODO refactor this!!!
-        x = self.output_layer(x)
-        x = self.avgpool(x).squeeze(-1).squeeze(-1)
-        x = self.head(x)
+        
+        # Each stage has multiple swin blocks inside, alternating with W-MHSA and SW-MHSA
+        x = self.stage_1(x)
+        x = self.stage_2(x)
+        x = self.stage_3(x)
+        x = self.stage_4(x)
+
+        # Output layers
+        x = self.out_layer(x)
         return x
 
 
 def main():
     x = torch.rand((1, 3, 224, 224))
-    model = SwinTransformer(in_channels=3, patch_size=4, embed_dim=96, stage_1_depth=2, stage_2_depth=2, stage_3_depth=6, stage_4_depth=2, num_classes=10)
+    model = SwinTransformer(in_channels=3, patch_size=4, embed_dim=96, num_classes=10)
     out = model(x)
     print("OUTPUT SHAPE IS ", out.shape)
 
